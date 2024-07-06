@@ -1,0 +1,17 @@
+[package]
+name = "gl-clock"
+version = "0.1.0"
+edition = "2021"
+
+[profile.release]
+lto = true
+opt-level = 3
+
+[dependencies]
+anyhow = "1.0.86"
+bytemuck = { version = "1.16.1", features = ["derive"] }
+chrono = { version = "0.4.38", default-features = false, features = ["std", "clock"] }
+gl = "0.14.0"
+glam = { version = "0.28.0", features = ["bytemuck"] }
+image = { version = "0.25.1", default-features = false, features = ["webp"] }
+sdl2 = { version = "0.37.0", features = ["static-link", "bundled", "raw-window-handle"] }
