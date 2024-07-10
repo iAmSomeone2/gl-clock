@@ -1,7 +1,12 @@
 #version 460 core
 layout (location = 0) in vec3 a_position;
 
-uniform mat4 transformations[60];
+layout (std140, binding = 0) uniform Camera {
+    mat4 projection;
+    mat4 view;
+};
+
+uniform mat4 model[60];
 
 out vec3 v_Color;
 
@@ -25,8 +30,7 @@ vec3 getColor() {
 const float offsetAmt = 1.0 / 60.0;
 
 void main() {
-    vec4 position = transformations[gl_InstanceID] * vec4(a_position.xyz, 1.0);
+    vec4 position = projection * view * model[gl_InstanceID] * vec4(a_position.xyz, 1.0);
     gl_Position = position;
     v_Color = getColor();
-
 }

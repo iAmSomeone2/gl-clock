@@ -1,5 +1,5 @@
-#version 410 core
-precision mediump float;
+#version 460 core
+precision lowp float;
 
 uniform vec3 color;
 

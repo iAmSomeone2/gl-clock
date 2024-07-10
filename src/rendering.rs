@@ -1,14 +1,15 @@
 use std::collections::HashMap;
+use std::f32::consts;
 use std::ffi::{CStr, CString};
 use std::fmt::{Display, Formatter};
-use std::mem::offset_of;
+use std::mem::{offset_of, size_of};
 use std::path::Path;
 use std::ptr::{null, null_mut};
 use std::{mem, ptr};
 
 use bytemuck::{bytes_of, cast_slice, Pod, Zeroable};
 use gl::types::{GLchar, GLenum, GLint, GLsizei, GLsizeiptr, GLuint};
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use image::ColorType;
 use sdl2::video::{GLContext, GLProfile, SwapInterval, Window};
 use sdl2::{Sdl, VideoSubsystem};
@@ -41,6 +42,12 @@ impl GPUBuffer {
         }
     }
 
+    pub fn bind_uniform_buffer(&self, index: u32, offset: isize, size: isize) {
+        unsafe {
+            gl::BindBufferRange(self.buffer_type, index, self.id, offset, size);
+        }
+    }
+
     pub fn set_data(&self, data: &[u8], usage: GLenum) {
         unsafe {
             gl::BindBuffer(self.buffer_type, self.id);
@@ -50,6 +57,26 @@ impl GPUBuffer {
                 data.as_ptr() as *const _,
                 usage,
             );
+        }
+    }
+
+    pub fn allocate_space(&self, size: isize, usage: GLenum) {
+        unsafe {
+            gl::BindBuffer(self.buffer_type, self.id);
+            gl::BufferData(self.buffer_type, size, null(), usage);
+            gl::BindBuffer(self.buffer_type, 0);
+        }
+    }
+
+    pub fn set_sub_data(&self, offset: isize, data: &[u8]) {
+        unsafe {
+            gl::BindBuffer(self.buffer_type, self.id);
+            gl::BufferSubData(
+                self.buffer_type,
+                offset,
+                data.len() as GLsizeiptr,
+                data.as_ptr() as *const _,
+            )
         }
     }
 }
@@ -112,9 +139,9 @@ impl GPUTexture {
         let img = image::io::Reader::open(path)?.decode()?;
         let img_width = img.width();
         let img_height = img.height();
-        let img_format = match &img.color() {
-            ColorType::Rgb8 => gl::RGB,
-            ColorType::Rgba8 => gl::RGBA,
+        let (internal_format, data_format) = match &img.color() {
+            ColorType::Rgb8 => (gl::COMPRESSED_RGB as GLsizei, gl::RGB),
+            ColorType::Rgba8 => (gl::COMPRESSED_RGBA as GLsizei, gl::RGBA),
             color_type => {
                 return Err(anyhow::Error::msg(format!(
                     "Unsupported color format: {:?}",
@@ -141,11 +168,11 @@ impl GPUTexture {
             gl::TexImage2D(
                 gl::TEXTURE_2D,
                 0,
-                img_format as GLsizei,
+                internal_format,
                 img_width as GLsizei,
                 img_height as GLsizei,
                 0,
-                img_format,
+                data_format,
                 gl::UNSIGNED_BYTE,
                 img.as_bytes().as_ptr() as *const _,
             );
@@ -325,6 +352,30 @@ impl Mesh {
         ];
 
         Self::new(&vertices, &indices)
+    }
+}
+
+#[derive(Debug, PartialEq, Copy, Clone)]
+pub struct Transform {
+    pub translation: Vec3,
+    pub rotation: Quat,
+    pub scale: Vec3,
+}
+
+impl Default for Transform {
+    fn default() -> Self {
+        Self {
+            translation: Vec3::ZERO,
+            rotation: Quat::IDENTITY,
+            scale: Vec3::ONE,
+        }
+    }
+}
+
+impl Transform {
+    /// Returns the transformation as a 4x4 matrix
+    pub fn get_matrix(&self) -> Mat4 {
+        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
     }
 }
 
@@ -514,6 +565,39 @@ impl Drop for ShaderProgram {
     }
 }
 
+pub struct Camera {
+    position: Vec3,
+    target: Vec3,
+    look_at: Mat4,
+    projection: Mat4,
+    uniform_buffer: GPUBuffer,
+}
+
+impl Camera {
+    const UBO_SIZE: usize = size_of::<Mat4>() * 2;
+    const VIEW_UBO_OFFSET: usize = size_of::<Mat4>();
+
+    pub fn new(position: Vec3, target: Vec3) -> Self {
+        let look_at = Mat4::look_at_rh(position, target, Vec3::new(0.0, 1.0, 0.0));
+
+        let uniform_buffer = GPUBuffer::new(gl::UNIFORM_BUFFER);
+        uniform_buffer.allocate_space(Camera::UBO_SIZE as isize, gl::STATIC_DRAW);
+        uniform_buffer.bind_uniform_buffer(0, 0, Camera::UBO_SIZE as isize);
+
+        let projection = Mat4::perspective_rh_gl(consts::FRAC_PI_4, 1.0, 0.01, 100.0);
+        uniform_buffer.set_sub_data(0, bytes_of(&projection));
+        uniform_buffer.set_sub_data(Self::VIEW_UBO_OFFSET as isize, bytes_of(&look_at));
+
+        Self {
+            position,
+            target,
+            look_at,
+            projection,
+            uniform_buffer,
+        }
+    }
+}
+
 pub struct Renderer {
     #[allow(unused)]
     gl_ctx: GLContext,
@@ -522,6 +606,7 @@ pub struct Renderer {
     #[allow(unused)]
     video_subsystem: VideoSubsystem,
     window: Window,
+    camera: Camera,
 }
 
 impl Display for Renderer {
@@ -535,6 +620,8 @@ impl Display for Renderer {
 }
 
 impl Renderer {
+    const CLEAR_MASK: u32 = gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT;
+
     pub fn new(sdl_ctx: &Sdl) -> anyhow::Result<Self> {
         let video_subsystem = sdl_ctx.video().map_err(anyhow::Error::msg)?;
 
@@ -567,7 +654,7 @@ impl Renderer {
         gl::load_with(|name| video_subsystem.gl_get_proc_address(name) as *const _);
 
         video_subsystem
-            .gl_set_swap_interval(SwapInterval::Immediate)
+            .gl_set_swap_interval(SwapInterval::VSync)
             .map_err(anyhow::Error::msg)?;
 
         let mut gl_version = (0, 0);
@@ -587,11 +674,13 @@ impl Renderer {
         };
 
         unsafe {
-            // gl::Enable(gl::DEPTH_TEST);
+            gl::Enable(gl::DEPTH_TEST);
             gl::Enable(gl::MULTISAMPLE);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
             gl::Viewport(0, 0, WINDOW_SIZE as i32, WINDOW_SIZE as i32);
             gl::ClearColor(0.2, 0.3, 0.3, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT);
+            gl::Clear(Self::CLEAR_MASK);
         }
 
         Ok(Self {
@@ -600,6 +689,7 @@ impl Renderer {
             window,
             gl_version,
             gl_renderer,
+            camera: Camera::new(Vec3::new(0.0, 0.0, -2.5), Vec3::ZERO),
         })
     }
 
@@ -616,7 +706,7 @@ impl Renderer {
     pub fn draw(&self, clock: &AnalogClock) {
         unsafe {
             gl::ClearColor(0.2, 0.3, 0.3, 1.0);
-            gl::Clear(gl::COLOR_BUFFER_BIT);
+            gl::Clear(Self::CLEAR_MASK);
         }
 
         clock.draw();

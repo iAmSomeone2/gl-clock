@@ -28,7 +28,7 @@ impl ClockFace {
         include_str!("shaders/clockFace.frag"),
     );
 
-    const FACE_TEXTURE_PATH: &'static str = "assets/textures/clockFace.png";
+    const FACE_TEXTURE_PATH: &'static str = "assets/textures/clockFace.webp";
 
     const TICK_SHADER_SRC: (&'static str, &'static str) = (
         include_str!("shaders/clockTick.vert"),
@@ -63,13 +63,15 @@ impl ClockFace {
         let size = 2.0;
 
         let face_mesh = Mesh::make_rect(size, size, None, None);
-        let face_shader_program = unsafe {
+        let mut face_shader_program = unsafe {
             ShaderProgram::from_sources(
                 "clockFace",
                 Self::FACE_SHADER_SRC.0,
                 Self::FACE_SHADER_SRC.1,
             )
         }?;
+
+        face_shader_program.set_mat4("model", &Mat4::IDENTITY);
 
         let tex_path = PathBuf::from_str(Self::FACE_TEXTURE_PATH)?;
 
@@ -89,7 +91,7 @@ impl ClockFace {
             .map(|i| ClockFace::calculate_tick_transform(i, tick_height))
             .collect();
         tick_shader_program.activate();
-        tick_shader_program.set_mat4_array("transformations", &transformations);
+        tick_shader_program.set_mat4_array("model", &transformations);
 
         Ok(Self {
             face_mesh,
@@ -188,7 +190,7 @@ impl ClockHand {
     /// Set the hand's rotation (in degrees)
     pub fn set_rotation(&mut self, rotation: f32) {
         let radians = rotation * (consts::PI / 180.0);
-        self.rotation = -radians;
+        self.rotation = radians;
 
         self.target_point.x = self.rotation.cos() * self.length;
         self.target_point.y = self.rotation.sin() * self.length;
@@ -206,7 +208,7 @@ impl Drawable for ClockHand {
         shader_program.activate();
 
         // Set uniforms
-        shader_program.set_mat4("transformation", &self.transform);
+        shader_program.set_mat4("model", &self.transform);
         shader_program.set_vec3("color", &self.color);
 
         mesh.draw();

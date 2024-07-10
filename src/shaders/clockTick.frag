@@ -1,5 +1,5 @@
 #version 460 core
-precision mediump float;
+precision lowp float;
 
 in vec3 v_Color;
 
