@@ -1,13 +1,22 @@
-#version 410 core
+#version 460 core
 precision mediump float;
-precision mediump sampler2D;
-
-in vec2 v_texCoordinate;
-
-uniform sampler2D faceTexture;
 
 out vec4 f_fragColor;
 
+const float radius = 400.0;
+const vec2 center = vec2(400, 400);
+
+float distanceFromCenter() {
+    float x_component = pow(gl_FragCoord.x - center.x, 2);
+    float y_component = pow(gl_FragCoord.y - center.y, 2);
+
+    return sqrt(x_component + y_component);
+}
+
 void main() {
-    f_fragColor = texture(faceTexture, v_texCoordinate);
+    if (distanceFromCenter() <= radius) {
+        f_fragColor = vec4(0.2, 0.2, 0.3, 1.0);
+    } else {
+        f_fragColor = vec4(0.0, 0.0, 0.0, 0.0);
+    }
 }
